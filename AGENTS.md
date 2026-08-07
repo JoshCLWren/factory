@@ -1,0 +1,358 @@
+# AGENTS.md
+
+Guidelines for AI agents working in this codebase.
+
+## Agent Ownership Policy
+
+All AI agents working in this codebase are **high-ownership agents**.
+
+**Key Principle**: If you find a bug (pre-existing or new), it is your responsibility to fix it. You are not a lazy AI that ignores problems and pushes them to human reviewers.
+
+**Never dismiss failures as "pre-existing."** Fix them. Every time. No exceptions.
+
+## CORE PRINCIPLE: NEVER SKIP TESTS
+
+**⚠️ TESTS MUST NEVER BE SKIPPED - EVER.**
+
+If a test is failing:
+- ✅ FIX THE TEST
+- ✅ FIX THE CODE THAT BREAKS THE TEST
+- ✅ INVESTIGATE ROOT CAUSE
+- ❌ **NEVER SKIP THE TEST**
+
+**This applies to:** All automated tests (unit, integration, E2E), all developers (human and AI), all situations (no exceptions).
+
+**Requirements:**
+- **Never use `--no-verify` or bypass hooks** to avoid fixing issues
+- **Never say "this is pre-existing" and walk away** - fix it anyway
+- **Fix all test failures** before committing, even if the failure appears to be pre-existing
+- **Write regression tests** for bugs you find and fix
+- **Update documentation** when you find gaps or outdated information
+
+
+## CORE PRINCIPLE: PR FEEDBACK TASKS ARE NOT DONE UNTIL PUSHED
+
+**⚠️ When asked to apply PR feedback, the job is: edit → verify → commit → push. All four steps. Every time.**
+
+If you edit files and run tests but stop before pushing, you have **not completed the task**. The user asked you to apply feedback to a PR — leaving changes local is not applying them.
+
+**Requirements:**
+- Edit the files with the requested changes
+- Verify all tests pass (Python + frontend)
+- Commit with a descriptive message
+- **Push to the remote branch immediately** — do not wait for the user to ask
+
+
+## CRITICAL: NEVER USE CI AS A LOCAL DEBUGGER
+
+CI is not a debugging tool. Run focused local validation appropriate to the change before pushing whenever the execution environment provides a checkout and required dependencies.
+
+For autonomous factory work, `docs/AUTONOMOUS_FACTORY_POLICY.md` is canonical for validation and browser gates. When browser validation is required, Chromium is the maintained required Playwright target. Firefox and WebKit are optional diagnostics for browser-specific investigations and must not delay ordinary issue closure or merges.
+
+Before pushing frontend changes from a normal local checkout:
+1. Run `cd frontend && pnpm run lint && pnpm run typecheck`.
+2. Run `cd frontend && pnpm run build`.
+3. Run `cd frontend && pnpm test`.
+4. Run focused Chromium Playwright coverage when the change affects browser behavior.
+5. Fix every failure caused or exposed by the change before pushing.
+
+**If E2E tests need a backend:** Run `make dev` first. The API runs on port 8000 and Vite runs on port 5173.
+
+Never skip meaningful tests or use CI as a substitute for debugging a locally reproducible failure. Factory workers that cannot execute a local check in their runtime must state that limitation truthfully and rely only on the validation boundary permitted by the canonical factory policy.
+
+## Project Overview
+
+Comic Pile is a dice-driven comic reading tracker built with:
+- **Backend**: Python 3.14, FastAPI, SQLAlchemy, PostgreSQL
+- **Frontend**: React 19, Vite, Tailwind CSS
+- **Package managers**: `uv` (Python), `pnpm` (frontend)
+
+## CRITICAL: Async PostgreSQL Only in Application Code
+
+**Application code must use asyncpg (async PostgreSQL) ONLY. Never use synchronous database drivers in `app/` or `comic_pile/`.**
+
+**Database Access Rules**:
+- ✅ **USE in app code**: `asyncpg` (async), `create_async_engine()`, `AsyncSession`
+- ❌ **NEVER USE in app code**: `psycopg2`, `create_engine()` (sync), `Session` (sync), or any sync DB driver
+
+**The ONE exception — `psycopg` is permitted inside `alembic/` ONLY for migrations**:
+- `psycopg[binary]` (the psycopg v3 sync driver) is a core dependency, but its sync use is confined to `alembic/env.py`.
+- `alembic/env.py` converts the app's `postgresql+asyncpg://` URL to `postgresql+psycopg://` so Alembic can run migrations synchronously.
+- `app/config.py` converts any `postgresql+psycopg://` URL back to `postgresql+asyncpg://` at runtime, so the application never runs sync DB access.
+
+**Why async-only in app code?** Weeks of refactoring converted the codebase to async. Mixing sync/async causes event loop conflicts and greenlet errors. Sync DB access in `app/` or `comic_pile/` WILL BREAK the application.
+
+**If you need to create tables in tests**: Use module-scoped `@pytest_asyncio.fixture` with `create_async_engine()`, call `await conn.run_sync(Base.metadata.create_all)`. See `tests_e2e/conftest.py:_create_database_tables` for example.
+
+**Violating this rule will undo weeks of work and break the application.**
+
+## Build/Lint/Test Commands
+
+### Linting
+```bash
+make lint                    # All linters (Python + JS + HTML)
+ruff check .                 # Python only
+ty check --error-on-warning  # Python type checking
+cd frontend && pnpm run lint  # Frontend ESLint
+```
+
+### Testing
+```bash
+pytest                                          # All Python tests
+make test                                       # With coverage
+pytest tests/test_roll_api.py -v                # Single file
+pytest tests/test_roll_api.py::test_roll_success -v  # Single function
+pytest -k "roll" -v                             # Pattern matching
+cd frontend && pnpm test                         # Frontend unit tests (vitest)
+cd frontend && pnpm run typecheck                # Frontend TypeScript check
+```
+
+### E2E Tests (Playwright)
+**⚠️ MUST build frontend first:**
+```bash
+make verify-e2e                         # Builds + runs TypeScript Playwright tests
+cd frontend && pnpm run test:e2e:quick  # Skip build (faster iteration)
+cd frontend && pnpm run build && npx playwright test --headed  # Run with browser visible
+```
+
+**Why build required?** Playwright tests run against production build in `static/react/`, not dev server. Without build, tests fail with 404s for CSS/JS assets.
+
+## Python Code Style
+
+### Imports
+Order: standard library, third-party, local. Ruff auto-sorts with `ruff check --fix`.
+
+### Type Annotations
+- **Required** on all public functions with precise types
+- **Never use `Any`** - ruff ANN401 rule enforced
+- Use `Mapped[]` for SQLAlchemy model columns
+- Use `|` union syntax, not `Union[]` or `Optional[]`
+
+### Naming Conventions
+- **Functions/variables**: `snake_case`
+- **Classes**: `PascalCase`
+- **Constants**: `SCREAMING_SNAKE_CASE`
+- **Private**: prefix with `_`
+
+### Docstrings
+Google convention, required for modules and public functions. Include Args/Returns sections.
+
+### Formatting
+- **Line length**: 100 characters
+- **Indentation**: 4 spaces
+- **Trailing commas**: Yes, for multi-line structures
+
+### Linter Ignores - PROHIBITED
+The pre-commit hook blocks these comments:
+- `# type: ignore`
+- `# noqa`
+- `# ruff: ignore`
+- `# pylint: ignore`
+
+Fix the underlying issue instead of suppressing warnings.
+
+### CRITICAL: MissingGreenlet Errors After Database Commits
+
+**Symptom**: `sqlalchemy.exc.MissingGreenlet: greenlet_spawn has not been called`
+
+**Root Cause**: Accessing SQLAlchemy model attributes after `await db.commit()` causes session expiration. SQLAlchemy lazy-loads attributes on access, but after commit the session is closed/expired.
+
+**Example of buggy code**:
+```python
+await db.commit()
+
+# This will FAIL - accessing thread.title after commit triggers lazy load
+return RollResponse(
+    title=thread.title,  # ❌ MissingGreenlet error
+    format=thread.format,
+)
+```
+
+**Required Fix Pattern**:
+```python
+# Extract all needed attributes BEFORE commit
+thread_title = thread.title
+thread_format = thread.format
+thread_issues = thread.issues_remaining
+thread_position = thread.queue_position
+
+await db.commit()
+
+# Use extracted values after commit - safe!
+return RollResponse(
+    title=thread_title,  # ✅ Works
+    format=thread_format,
+    issues_remaining=thread_issues,
+    queue_position=thread_position,
+)
+```
+
+**Rule**: If you need data from a SQLAlchemy model after `db.commit()`, extract it into variables BEFORE the commit.
+
+## API Patterns
+
+### Pydantic Schemas
+All API input/output uses Pydantic models in `app/schemas/`:
+```python
+class ThreadCreate(BaseModel):
+    """Schema for creating a new thread."""
+    title: str = Field(..., min_length=1)
+    format: str = Field(..., min_length=1)
+    issues_remaining: int = Field(..., ge=0)
+    notes: str | None = None
+```
+
+### SQLAlchemy Models
+Models in `app/models/` use `Mapped` type annotations:
+```python
+class Thread(Base):
+    __tablename__ = "threads"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    last_rating: Mapped[float | None] = mapped_column(Float, nullable=True)
+```
+
+### Error Handling
+Use FastAPI's HTTPException with appropriate status codes:
+```python
+if not thread or thread.user_id != current_user.id:
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"Thread {thread_id} not found",
+    )
+```
+
+ ## Testing Patterns
+
+### Browser UI Tests
+
+**Use TypeScript Playwright tests** (in `frontend/src/test/`) for browser automation. Python Playwright tests are NOT supported due to event loop conflicts.
+
+**Running E2E Tests Locally:**
+
+```bash
+make setup
+make dev
+make verify-e2e
+```
+
+**Common Commands:** `npx playwright test --project=chromium` (all), `npx playwright test roll.spec.ts` (single file), `npx playwright test --ui` (interactive), `npx playwright test --headed` (browser visible), `npx playwright test --debug` (debug mode).
+
+### API Tests
+
+API tests use async PostgreSQL test databases. Tests in `tests/` directory, files: `test_*.py`, functions: `test_*`. Use `@pytest.mark.asyncio` for async tests. Test both success and error paths. Maintain 94% coverage threshold.
+
+**Key Fixtures (from `tests/conftest.py`)**:
+```python
+# Authenticated HTTP client
+async def test_example(auth_client, sample_data):
+    response = await auth_client.post("/api/roll/")
+    assert response.status_code == 200
+
+# Database session
+def test_db_example(db):
+    thread = db.get(Thread, 1)
+```
+
+### Docker Test Environment
+
+File: `docker-compose.test.yml` - PostgreSQL 16 on port 5437.
+
+```bash
+make docker-test-up     # Start test environment
+make docker-test-health # Check health
+make docker-test-logs   # View logs
+make docker-test-down   # Stop test environment
+```
+
+Port conflicts: Dev (5435), Test (5437), CI (5432).
+
+## Frontend Code Style
+
+- Functional components with hooks
+- Custom hooks with useState/useEffect for server state
+- React Router for navigation
+
+```jsx
+import { useState, useEffect, useCallback } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
+import { api } from '../services/api'
+
+export function useResource(id) {
+  const [data, setData] = useState(null)
+  const [isPending, setIsPending] = useState(true)
+  const [isError, setIsError] = useState(false)
+  const [error, setError] = useState(null)
+
+  const fetchData = useCallback(async () => {
+    if (!id) {
+      setIsPending(false)
+      return
+    }
+    setIsPending(true)
+    setIsError(false)
+    setError(null)
+    try {
+      const result = await api.getResource(id)
+      setData(result)
+    } catch (err) {
+      setIsError(true)
+      setError(err)
+    } finally {
+      setIsPending(false)
+    }
+  }, [id])
+
+  useEffect(() => {
+    fetchData()
+  }, [fetchData])
+
+  return { data, isPending, isError, error, refetch: fetchData }
+}
+
+export default function ExamplePage() {
+  const { id } = useParams()
+  const navigate = useNavigate()
+  const { data, isPending, isError } = useResource(id)
+
+  if (isPending) return <div>Loading...</div>
+  if (isError) return <div>Error loading resource</div>
+
+  return <div>{data?.name}</div>
+}
+```
+
+## Database Migrations
+
+```bash
+alembic revision --autogenerate -m "description"  # Create migration
+make migrate  # Run migrations (or: alembic upgrade head)
+```
+
+## Git Workflow
+
+- Branch from `main`: `git checkout -b phase/X-description`
+- Commit messages: imperative, component-scoped (e.g., "Add thread creation API endpoint")
+- Run `make lint` and `make pytest` before committing
+- Open PRs as **ready for review by default**. Do **not** open draft PRs unless the user explicitly asks for a draft. This repo relies on CodeRabbit signals that do not arrive on draft PRs for the current plan/tier.
+- **Add one file at `docs/changelog.d/YYYY-MM-DD-<pr-number>.md` in every product, behavior, deployment, operational, or factory-tooling PR before readiness or merge.** The filename date must match the first heading, the fragment must link the PR, and it must explain what changed and why it matters. Treat `docs/changelog.md` as a frozen archive. Documentation-only, test-only, generated-artifact-only, or strictly internal refactors may omit a fragment only when the PR body explicitly says `Changelog: not user-facing`.
+
+## GitHub Issue Workflow
+
+GitHub Issues are the backlog and status source of truth. The former Markdown
+kanban is archived and must not be used to determine current status.
+
+Before choosing work, run:
+
+```bash
+make next-task
+```
+
+For a complete copy-paste execution prompt, read
+[`prompts/agent-next-task.md`](prompts/agent-next-task.md).
+
+Agents with the `github-issue-kanban` skill should follow that skill. Other
+agents must read `docs/ISSUE_EXECUTION_PROTOCOL.md`, update the selected
+issue's `ralph-status:*` label before editing, and add a verification comment
+before closing the issue.
