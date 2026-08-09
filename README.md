@@ -19,5 +19,5 @@ The purpose of this repository is to show the actual working system rather than 
 The snapshot currently tracks ComicPile factory policy Version 19 and Durable Resume Packet V1.
 
 ComicPile automatically copies only the five files listed above to a dedicated synchronization
-branch. This repository opens a pull request for that branch and enables guarded squash auto-merge,
-so public documentation follows the private source without publishing application code.
+branch. This repository opens and squash-merges a pull request for that branch automatically, so
+public documentation follows the private source without publishing application code.
