@@ -3,7 +3,7 @@ name: Auto-merge snapshot sync
 on:
   push:
     branches:
-      - sync/comic-pile-factory-v19
+      - sync/comic-pile-factory
 
 permissions:
   contents: write
@@ -24,14 +24,14 @@ jobs:
         run: |
           pr_url="$(gh pr list \
             --repo "$GITHUB_REPOSITORY" \
-            --head sync/comic-pile-factory-v19 \
+            --head sync/comic-pile-factory \
             --state open \
             --json url \
             --jq '.[0].url // empty')"
           if [[ -z "$pr_url" ]]; then
             pr_url="$(gh pr create \
               --repo "$GITHUB_REPOSITORY" \
-              --head sync/comic-pile-factory-v19 \
+              --head sync/comic-pile-factory \
               --base main \
               --title "Sync ComicPile factory contract" \
               --body "Automated allowlisted snapshot from the private ComicPile repository. No application source or secrets are copied.")"
