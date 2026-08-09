@@ -1,6 +1,6 @@
 # ComicPile Autonomous Factory Policy
 
-Version: 17
+Version: 19
 
 This is the canonical policy for every scheduled ChatGPT worker, the local OpenCode factory, and interactive factory repair sessions.
 
@@ -15,10 +15,13 @@ Success is measured by issues truthfully closed and production defects removed. 
 The factory follows this permanent cycle:
 
 1. drain every executable open issue except the deferred backlog-zero checkpoint #679;
-2. when #679 is the only remaining executable checkpoint, restore and run the complete maintained Chromium Playwright E2E suite;
-3. create one GitHub issue for every independent reproducible product defect surfaced by Chromium E2E, with evidence and a `bug` label;
-4. return immediately to backlog draining;
-5. repeat whenever the ordinary executable backlog reaches zero again.
+2. when no other executable delivery work exists, #679 immediately becomes required work, including when the remaining ordinary backlog is owned, blocked, or dependency-gated;
+3. restore and run the complete maintained Chromium Playwright E2E suite;
+4. create one GitHub issue for every independent reproducible product defect surfaced by Chromium E2E, with evidence and a `bug` label;
+5. return immediately to backlog draining as those new bugs become executable;
+6. repeat whenever the ordinary executable backlog reaches zero again.
+
+An empty or blocked ordinary backlog is never an idle condition and never a reason to stop the factory. A worker must not pause, disable, suspend, or otherwise mutate its own schedule because work is blocked or exhausted. Only Josh, or an interactive session acting on Josh's direct instruction, may pause or disable a factory. Scheduled workers remain enabled and continue checking on schedule.
 
 User-reported bugs remain first within the bug queue. Reproducible E2E-discovered bugs come next, then ordinary executable issues. Preserve `user-reported` only for defects actually reported by a user.
 
@@ -74,6 +77,8 @@ Repeat until the selected issue reaches closure or a valid blocker:
 
 After work becomes blocked, merge-gated, or dependent on a human-only decision, preserve durable context and return to selection rather than polishing indefinitely.
 
+If no ordinary executable issue can be selected, do not declare the factory idle. Enter the backlog-zero Chromium phase and work #679 instead.
+
 ## User-facing changelog gate
 
 Every product, behavior, deployment, operational, or factory-tooling PR must update the generated user-facing changelog before it can receive a pass verdict, ready marker, merge-gated marker, or merge. Do that by adding exactly one isolated Markdown fragment at `docs/changelog.d/YYYY-MM-DD-<pr-number>.md`. The filename date must match the fragment's first `## YYYY-MM-DD` heading, the fragment must link the actual PR, and the text must describe what changed and why it matters under a user-recognizable feature area.
@@ -128,11 +133,13 @@ A normal heartbeat must accomplish at least one of these while executable issues
 
 Comments, labels, claims, reviews, PR-body edits, ready markers, help text, speculative plans, and optional test additions alone are not sufficient.
 
+When ordinary executable work is exhausted, entering #679 and the Chromium E2E bug-harvesting cycle is the required heartbeat outcome. `idle`, self-pausing, and self-disabling are invalid substitutes.
+
 ## Backlog-zero Chromium phase
 
 Issue #679 is excluded from ordinary executable-backlog selection while any other executable issue remains open, unless disabled Chromium coverage itself blocks safe delivery.
 
-When every other executable issue is closed:
+When no other executable delivery work remains, including when all remaining ordinary work is owned, blocked, or dependency-gated:
 
 1. prioritize #679 and restore the maintained Chromium Playwright CI suite;
 2. merge that restoration only after the normal exact-head gates pass;
@@ -154,7 +161,51 @@ When owned work cannot safely advance now:
 1. preserve concise durable blocker context;
 2. release active execution when appropriate;
 3. immediately select the highest-value free executable issue;
-4. return when the blocker changes.
+4. if none exists, enter #679 and the Chromium E2E cycle;
+5. return when the blocker changes.
+
+Blocked work never authorizes a worker to pause or disable itself.
+
+## Mandatory label state machine
+
+Every worker owns issue and pull-request metadata as part of the work. Reconcile labels when
+claiming, opening or replaying a PR, handing work off, receiving review, starting CI validation,
+becoming ready, blocking, merging, and ending a turn. Josh must never need to request routine
+factory labels.
+
+Apply these states exactly. Reconcile each target with one full label-set replacement so stale
+mutually exclusive state and owner labels disappear in the same atomic write that applies the
+complete truthful target set. Never implement a transition as separate remove-then-add calls:
+
+| State | Issue labels | Pull-request labels |
+|---|---|---|
+| Unclaimed executable work | `ralph-task`, `ralph-status:pending`, one priority, `factory`, `factory:unowned` | Not applicable |
+| Actively implemented | `ralph-status:in-progress`, `factory`, `factory:building`, one `factory:<worker>` | `factory`, `factory:building`, one `factory:<worker>` when a PR exists |
+| Exact head needs review | `ralph-status:in-review`, `factory`, `factory:review`, current owner or `factory:unowned` | `factory`, `factory:review`, current owner or `factory:unowned` |
+| Actionable review findings | `ralph-status:in-progress` when owned, otherwise `ralph-status:pending`; `factory`, `factory:changes-requested`, current owner or `factory:unowned` | `factory`, `factory:changes-requested`, current owner or `factory:unowned` |
+| Review passed; exact-head CI pending | `ralph-status:validation`, `factory`, `factory:ci`, current owner or `factory:unowned` | `factory`, `factory:ci`, current owner or `factory:unowned` |
+| Every merge gate satisfied | `ralph-status:in-review`, `factory`, `factory:ready`, current owner or `factory:unowned` | `factory`, `factory:ready`, current owner or `factory:unowned` |
+| Human or external blocker | `ralph-status:blocked`, `factory`, `factory:blocked`, `factory:unowned` | Issue-only blocker: preserve the truthful PR workflow state with `factory:unowned`; PR-level blocker: `factory`, `factory:blocked`, `factory:unowned` |
+| Lease released or stale | Executable status, `factory`, `factory:unowned`; also preserve `factory:review` or `factory:changes-requested` when applicable | `factory`, `factory:unowned`, plus the truthful review state |
+| Merged and complete | `ralph-status:done`, then close after verification; remove transient factory state/owner labels | Merged PR needs no further transition |
+
+Rules:
+
+- `factory:building`, `factory:review`, `factory:changes-requested`, `factory:ci`,
+  `factory:ready`, and `factory:blocked` are mutually exclusive workflow states.
+- `factory:unowned`, `factory:local`, and `factory:1` through `factory:5` are mutually exclusive
+  next-action owners.
+- Never leave a factory-produced or factory-managed open PR without `factory`, one truthful
+  workflow-state label, and one truthful owner label.
+- A push invalidates `factory:ci` and `factory:ready`; transition the exact new head back to
+  `factory:review` unless review findings already require `factory:changes-requested`.
+- Cross-worker takeover and merge are allowed. The new worker replaces the owner label and may
+  merge work it did not author after every exact-head gate passes.
+- If `gh pr edit` fails because of deprecated Projects Classic GraphQL fields, use the
+  issue-compatible REST label-replacement endpoint with the complete target label set. A POST that
+  only adds labels, or sequential DELETE/POST calls, is not atomic reconciliation.
+- Before ending any turn, compare the issue, PR, review, CI, lease, and merge state and repair any
+  metadata contradiction discovered.
 
 ## Repository safety
 
@@ -165,6 +216,7 @@ When owned work cannot safely advance now:
 - Never weaken checks, skip tests, remove meaningful coverage, bypass hooks, or add suppressions merely to make CI green.
 - Never manufacture evidence or claim commands ran when they did not.
 - Never mutate factory schedules or topology. Only Josh or an interactive session acting on Josh's direct instruction may do so.
+- Never pause, disable, suspend, or stop a scheduled factory because the ordinary backlog is blocked or empty. Keep the schedule enabled and switch to #679/E2E work.
 
 ## Closure truth
 
@@ -193,6 +245,30 @@ Use the existing canonical marker schemas:
 - ready: `<!-- comic-pile-factory-ready-v2:<sha> -->`
 - needs human: `<!-- comic-pile-factory-needs-human-v2:<sha-or-issue> -->`
 - released: `<!-- comic-pile-factory-claim-released-v3:<target>:<worker>:<epoch>:<reason> -->`
+
+## Durable resume packet
+
+Before releasing ownership, reaching a runtime limit, switching work, or ending with a claimed
+issue or PR unfinished, create or update one canonical GitHub comment in place. Do not create a new
+packet on every heartbeat.
+
+```text
+<!-- factory-resume:v1 -->
+## Factory resume packet
+Head: `<current SHA or none>`
+Current hypothesis: <one or two concrete sentences>
+Files touched: <paths, or none>
+Checks: <passed and failed commands/checks; include the decisive failure>
+Next narrow verification: <one specific command, inspection, or experiment>
+Remaining blocker/action: <what the next worker must resolve>
+Updated by: <durable worker ID and UTC timestamp>
+```
+
+Record observed facts, distinguish local checks from CI, include no secrets, and keep the packet
+short. A takeover worker reads the current packet before reconstructing context, verifies that its
+recorded head still matches, and updates or discards stale claims instead of trusting them blindly.
+The packet is operational state, not a substitute for commits, tests, review markers, issue
+acceptance criteria, or truthful labels. Completed and verified work does not require a packet.
 
 Review leases last 45 minutes. Repair and implementation leases last 60 minutes after the latest real progress. Lease expiry permits another worker to continue that issue but does not require a peer to choose it over higher-priority work.
 

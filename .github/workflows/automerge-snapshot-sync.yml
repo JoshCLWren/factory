@@ -1,0 +1,45 @@
+name: Auto-merge snapshot sync
+
+on:
+  push:
+    branches:
+      - sync/comic-pile-factory-v19
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: automerge-snapshot-sync
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open or update the synchronization pull request
+        id: pull-request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pr_url="$(gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
+            --head sync/comic-pile-factory-v19 \
+            --state open \
+            --json url \
+            --jq '.[0].url // empty')"
+          if [[ -z "$pr_url" ]]; then
+            pr_url="$(gh pr create \
+              --repo "$GITHUB_REPOSITORY" \
+              --head sync/comic-pile-factory-v19 \
+              --base main \
+              --title "Sync ComicPile factory contract" \
+              --body "Automated allowlisted snapshot from the private ComicPile repository. No application source or secrets are copied.")"
+          fi
+          echo "url=$pr_url" >> "$GITHUB_OUTPUT"
+
+      - name: Enable guarded squash auto-merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ steps.pull-request.outputs.url }}
+        run: gh pr merge "$PR_URL" --auto --squash --delete-branch
